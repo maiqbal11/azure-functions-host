@@ -244,7 +244,7 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost.Management
             RunFromPackageContext pkgContext = assignmentContext.GetRunFromPkgContext();
 
             if ((pkgContext.IsScmRunFromPackage() && await pkgContext.BlobExistsAsync(_logger)) ||
-               (!string.IsNullOrEmpty(pkgContext.Url) && pkgContext.Url != "1"))
+                (!pkgContext.IsScmRunFromPackage() && !string.IsNullOrEmpty(pkgContext.Url) && pkgContext.Url != "1"))
             {
                 await ApplyBlobPackageContext(pkgContext.Url, options.ScriptPath);
             }
@@ -366,10 +366,21 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost.Management
             {
                 return CodePackageType.Zip;
             }
+            else if (FileIsAny(".squashfs", ".sfs", ".sqsh", ".img", ".fs"))
+            {
+                return CodePackageType.Squashfs;
+            }
+            else if (FileIsAny(".zip"))
+            {
+                return CodePackageType.Zip;
+            }
             else
             {
                 throw new InvalidOperationException($"Can't find CodePackageType to match {filePath}");
             }
+
+            bool FileIsAny(params string[] options)
+                => options.Any(o => filePath.EndsWith(o, StringComparison.OrdinalIgnoreCase));
         }
 
         private void UnzipPackage(string filePath, string scriptPath)
@@ -396,37 +407,46 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost.Management
 
         private (string, string, int) RunBashCommand(string command, string metricName)
         {
-            using (_metricsLogger.LatencyEvent(metricName))
+            try
             {
-                var process = new Process
+                using (_metricsLogger.LatencyEvent(metricName))
                 {
-                    StartInfo = new ProcessStartInfo
+                    var process = new Process
                     {
-                        FileName = "bash",
-                        Arguments = $"-c \"{command}\"",
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        UseShellExecute = false,
-                        CreateNoWindow = true
+                        StartInfo = new ProcessStartInfo
+                        {
+                            FileName = "bash",
+                            Arguments = $"-c \"{command}\"",
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        }
+                    };
+                    _logger.LogInformation($"Running: {process.StartInfo.FileName} {process.StartInfo.Arguments}");
+                    process.Start();
+                    var output = process.StandardOutput.ReadToEnd().Trim();
+                    var error = process.StandardError.ReadToEnd().Trim();
+                    process.WaitForExit();
+                    _logger.LogInformation($"Output: {output}");
+                    if (process.ExitCode != 0)
+                    {
+                        _logger.LogError(error);
                     }
-                };
-                _logger.LogInformation($"Running: {process.StartInfo.FileName} {process.StartInfo.Arguments}");
-                process.Start();
-                var output = process.StandardOutput.ReadToEnd().Trim();
-                var error = process.StandardError.ReadToEnd().Trim();
-                process.WaitForExit();
-                _logger.LogInformation($"Output: {output}");
-                if (process.ExitCode != 0)
-                {
-                    _logger.LogError(error);
+                    else
+                    {
+                        _logger.LogInformation($"error: {error}");
+                    }
+                    _logger.LogInformation($"exitCode: {process.ExitCode}");
+                    return (output, error, process.ExitCode);
                 }
-                else
-                {
-                    _logger.LogInformation($"error: {error}");
-                }
-                _logger.LogInformation($"exitCode: {process.ExitCode}");
-                return (output, error, process.ExitCode);
             }
+            catch (Exception e)
+            {
+                _logger.LogError("Error running bash", e);
+            }
+
+            return (string.Empty, string.Empty, -1);
         }
 
         public IDictionary<string, string> GetInstanceInfo()
