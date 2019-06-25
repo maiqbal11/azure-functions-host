@@ -394,7 +394,7 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost.Management
         }
 
         private void UnsquashImage(string filePath, string scriptPath)
-            => RunBashCommand($"unsquashfs -f -d '{scriptPath}' '{filePath}'", MetricEventNames.LinuxContainerSpecializationUnsquash);
+            => RunBashCommand($"(mkdir -p '{scriptPath}' || true) && unsquashfs -f -d '{scriptPath}' '{filePath}'", MetricEventNames.LinuxContainerSpecializationUnsquash);
 
         private void MountSquashfsImage(string filePath, string scriptPath)
             => RunFuseMount($"squashfuse_ll -o nonempty '{filePath}' '{scriptPath}'", scriptPath);
