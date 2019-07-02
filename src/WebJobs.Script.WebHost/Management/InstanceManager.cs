@@ -17,8 +17,6 @@ using Microsoft.Azure.WebJobs.Script.WebHost.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.WindowsAzure.Storage;
-using Microsoft.WindowsAzure.Storage.Blob;
-using Microsoft.WindowsAzure.Storage.File;
 using Newtonsoft.Json;
 
 namespace Microsoft.Azure.WebJobs.Script.WebHost.Management
@@ -250,17 +248,8 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost.Management
             }
             else if (!string.IsNullOrEmpty(assignmentContext.AzureFilesConnectionString))
             {
-                ApplyAzureFilesContext(assignmentContext.AzureFilesConnectionString, assignmentContext.AzureFilesContentShare, "/home");
+                await MountCifs(assignmentContext.AzureFilesConnectionString, assignmentContext.AzureFilesContentShare, "/home");
             }
-        }
-
-        private void ApplyAzureFilesContext(string connectionString, string contentShare, string targetPath)
-        {
-            var sa = CloudStorageAccount.Parse(connectionString);
-            var key = Convert.ToBase64String(sa.Credentials.ExportKey());
-
-            var mountCommand = $"mount -t cifs //{sa.FileEndpoint.Host}/{contentShare} {targetPath} -o vers=3.0,username={sa.Credentials.AccountName},password={key},dir_mode=0777,file_mode=0777,serverino";
-            RunBashCommand($"(mkdir -p {targetPath} || true) && ({mountCommand}) && (mkdir -p /home/site/wwwroot || true)", MetricEventNames.LinuxContainerSpecializationAzureFilesMount);
         }
 
         private async Task ApplyBlobPackageContext(string blobUrl, string targetPath)
@@ -268,7 +257,7 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost.Management
             // download zip and extract
             var blobUri = new Uri(blobUrl);
             var filePath = await DownloadAsync(blobUri);
-            UnpackPackage(filePath, targetPath);
+            await UnpackPackage(filePath, targetPath);
 
             string bundlePath = Path.Combine(targetPath, "worker-bundle");
             if (Directory.Exists(bundlePath))
@@ -324,7 +313,7 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost.Management
             return filePath;
         }
 
-        private void UnpackPackage(string filePath, string scriptPath)
+        private async Task UnpackPackage(string filePath, string scriptPath)
         {
             var packageType = GetPackageType(filePath);
 
@@ -337,7 +326,7 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost.Management
                 }
                 else
                 {
-                    MountSquashfsImage(filePath, scriptPath);
+                    await MountFuse("squashfs", filePath, scriptPath);
                 }
             }
             else if (packageType == CodePackageType.Zip)
@@ -345,7 +334,7 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost.Management
                 // default to unzip for zip packages
                 if (_environment.IsMountEnabled())
                 {
-                    MountZipFile(filePath, scriptPath);
+                    await MountFuse("zip", filePath, scriptPath);
                 }
                 else
                 {
@@ -394,16 +383,36 @@ namespace Microsoft.Azure.WebJobs.Script.WebHost.Management
         }
 
         private void UnsquashImage(string filePath, string scriptPath)
-            => RunBashCommand($"(mkdir -p '{scriptPath}' || true) && unsquashfs -f -d '{scriptPath}' '{filePath}'", MetricEventNames.LinuxContainerSpecializationUnsquash);
+            => RunBashCommand($"unsquashfs -f -d '{scriptPath}' '{filePath}'", MetricEventNames.LinuxContainerSpecializationUnsquash);
 
-        private void MountSquashfsImage(string filePath, string scriptPath)
-            => RunFuseMount($"squashfuse_ll -o nonempty '{filePath}' '{scriptPath}'", scriptPath);
+        private async Task MountFuse(string type, string filePath, string scriptPath)
+            => await Mount(new[]
+            {
+                new KeyValuePair<string, string>("operation", type),
+                new KeyValuePair<string, string>("filePath", filePath),
+                new KeyValuePair<string, string>("targetPath", scriptPath),
+            });
 
-        private void MountZipFile(string filePath, string scriptPath)
-            => RunFuseMount($"fuse-zip -o nonempty -r '{filePath}' '{scriptPath}'", scriptPath);
+        private async Task MountCifs(string connectionString, string contentShare, string targetPath)
+        {
+            var sa = CloudStorageAccount.Parse(connectionString);
+            var key = Convert.ToBase64String(sa.Credentials.ExportKey());
+            await Mount(new[]
+           {
+                new KeyValuePair<string, string>("operation", "cifs"),
+                new KeyValuePair<string, string>("host", sa.FileEndpoint.Host),
+                new KeyValuePair<string, string>("accountName", sa.Credentials.AccountName),
+                new KeyValuePair<string, string>("accountKey", key),
+                new KeyValuePair<string, string>("contentShare", contentShare),
+                new KeyValuePair<string, string>("targetPath", targetPath),
+            });
+        }
 
-        private void RunFuseMount(string mountCommand, string targetPath)
-            => RunBashCommand($"(mknod /dev/fuse c 10 229 || true) && (mkdir -p '{targetPath}' || true) && ({mountCommand})", MetricEventNames.LinuxContainerSpecializationFuseMount);
+        private async Task Mount(IEnumerable<KeyValuePair<string, string>> formData)
+        {
+            var res = await _client.PostAsync(_environment.GetEnvironmentVariable(EnvironmentSettingNames.MeshInitURI), new FormUrlEncodedContent(formData));
+            _logger.LogInformation("Response {res} from init", res);
+        }
 
         private (string, string, int) RunBashCommand(string command, string metricName)
         {
