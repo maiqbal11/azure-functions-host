@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using Microsoft.Azure.WebJobs.Script.Abstractions;
 using Microsoft.Azure.WebJobs.Script.Config;
@@ -50,7 +51,7 @@ namespace Microsoft.Azure.WebJobs.Script.Rpc
                 var arguments = new WorkerProcessArguments()
                 {
                     ExecutablePath = description.DefaultExecutablePath,
-                    WorkerPath = description.GetWorkerPath()
+                    WorkerPath = HydrateWorkerPath(description.GetWorkerPath())
                 };
 
                 if (description.Language.Equals(LanguageWorkerConstants.JavaLanguageWorkerName))
@@ -132,7 +133,7 @@ namespace Microsoft.Azure.WebJobs.Script.Rpc
                 GetDefaultExecutablePathFromAppSettings(workerDescription, languageSection);
                 AddArgumentsFromAppSettings(workerDescription, languageSection);
 
-                string workerPath = workerDescription.GetWorkerPath();
+                string workerPath = HydrateWorkerPath(workerDescription.GetWorkerPath());
                 if (string.IsNullOrEmpty(workerPath) || File.Exists(workerPath))
                 {
                     _logger.LogDebug($"Will load worker provider for language: {workerDescription.Language}");
@@ -219,6 +220,30 @@ namespace Microsoft.Azure.WebJobs.Script.Rpc
             {
                 return Path.GetFullPath(Path.Combine(javaHome, "bin", defaultExecutablePath));
             }
+        }
+
+        internal string HydrateWorkerPath(string workerPath)
+        {
+            string os = string.Empty;
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                os = OSPlatform.Linux.ToString();
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                os = OSPlatform.OSX.ToString();
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                os = OSPlatform.Windows.ToString();
+            }
+
+            string architecture = RuntimeInformation.OSArchitecture.ToString();
+            string version = Environment.GetEnvironmentVariable(LanguageWorkerConstants.FunctionWorkerRuntimeVersionSettingName);
+
+            return workerPath.Replace("@os", os)
+                             .Replace("@architecture", architecture)
+                             .Replace($"{{{LanguageWorkerConstants.FunctionWorkerRuntimeVersionSettingName}}}", version);
         }
     }
 }
