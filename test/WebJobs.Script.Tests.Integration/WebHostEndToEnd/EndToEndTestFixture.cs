@@ -234,6 +234,7 @@ namespace Microsoft.Azure.WebJobs.Script.Tests
             }
             Environment.SetEnvironmentVariable(LanguageWorkerConstants.FunctionWorkerRuntimeSettingName, string.Empty);
             Environment.SetEnvironmentVariable(LanguageWorkerConstants.FunctionsWorkerProcessCountSettingName, string.Empty);
+            Environment.SetEnvironmentVariable(LanguageWorkerConstants.FunctionWorkerRuntimeVersionSettingName, string.Empty)
             return Task.CompletedTask;
         }
 
